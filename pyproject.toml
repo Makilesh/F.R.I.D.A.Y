@@ -8,7 +8,6 @@ dependencies = [
     "fastmcp",
     "httpx",
     "RealtimeSTT",
-    "RealtimeTTS",
     "RealtimeTTS[kokoro]",
     "faster-whisper",
     "cartesia",

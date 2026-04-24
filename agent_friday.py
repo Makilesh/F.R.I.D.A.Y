@@ -527,7 +527,7 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
                         max_tokens=max_tokens,
                         temperature=temperature,
                     )
-                    if response:
+                    if self._has_meaningful_response(response):
                         self.current_provider = provider
                         self.consecutive_errors = 0
                         return response
@@ -561,6 +561,17 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
 
         self._track_error()
         return {"content": ""}
+
+    def _has_meaningful_response(self, response: Any) -> bool:
+        if not isinstance(response, dict):
+            return False
+
+        tool_calls = response.get("tool_calls")
+        if isinstance(tool_calls, list) and len(tool_calls) > 0:
+            return True
+
+        content = response.get("content")
+        return isinstance(content, str) and bool(content.strip())
 
     async def _call_provider_with_tools(
         self,
