@@ -38,14 +38,15 @@ friday-tony-stark-demo/
 - Python 3.11+
 - `uv`
 - Local clone of `voice_engine_MVP`
+  - Repository: `https://github.com/Makilesh/voice_engine_MVP`
   - Default lookup: `../voice_engine_MVP/src` relative to this repo
   - Or set `VOICE_ENGINE_MVP_SRC` in `.env`
 
 ## Setup
 
 ```bash
-git clone https://github.com/SAGAR-TAMANG/friday-tony-stark-demo.git
-cd friday-tony-stark-demo
+git clone https://github.com/Makilesh/F.R.I.D.A.Y.git
+cd F.R.I.D.A.Y
 uv sync
 cp .env.example .env
 ```
@@ -53,6 +54,8 @@ cp .env.example .env
 Edit `.env` and set required keys (see below).
 
 ## Run
+
+Start both terminals from the same host environment (for example, the same WSL distro or the same native shell).
 
 Terminal 1 (MCP server):
 
@@ -68,14 +71,14 @@ uv run friday_voice
 
 ## Environment variables
 
-### Required for voice pipeline
+### Configuration for voice pipeline
 
 | Variable | Required | Notes |
 |---|---|---|
-| `OPENAI_API_KEY` | Optional | Used if OpenAI is reached in fallback chain |
-| `GEMINI_API_KEY` | Optional | Used if Gemini is reached in fallback chain |
-| `GROQ_API_KEY` | Optional | Preferred first provider if set |
-| `OLLAMA_ENABLED` | Optional | `true`/`false`, enables local Ollama fallback |
+| `OPENAI_API_KEY` | Conditional | Used if OpenAI is reached in fallback chain |
+| `GEMINI_API_KEY` | Conditional | Used if Gemini is reached in fallback chain |
+| `GROQ_API_KEY` | Conditional | Preferred first provider if set |
+| `OLLAMA_ENABLED` | Conditional | `true`/`false`, enables local Ollama fallback |
 | `OLLAMA_BASE_URL` | Optional | Default: `http://localhost:11434` |
 | `OLLAMA_MODEL` | Optional | Default: `llama3.1:8b` |
 | `USE_CARTESIA_TTS` | Optional | `false` uses local Kokoro (default), `true` uses Cartesia |
