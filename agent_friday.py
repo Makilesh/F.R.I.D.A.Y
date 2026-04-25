@@ -17,16 +17,18 @@ import json
 import logging
 import os
 import subprocess
-import sys
 import time
 from collections import deque
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import httpx
 from dotenv import load_dotenv
 from fastmcp import Client
+from voice_engine.config import get_config as get_voice_config
+from voice_engine.llm_handler import LLMHandler as BaseVoiceLLMHandler
+from voice_engine.stt_handler import STTHandler
+from voice_engine.tts_handler_optimized import TTSHandler
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -184,60 +186,6 @@ def _mcp_server_url() -> str:
     url = f"http://127.0.0.1:{MCP_SERVER_PORT}/sse"
     logger.info("MCP Server URL: %s", url)
     return url
-
-
-# ---------------------------------------------------------------------------
-# Voice MVP dynamic import wiring
-# ---------------------------------------------------------------------------
-
-
-def _resolve_voice_engine_src() -> Path:
-    """
-    Resolve voice_engine_MVP/src path.
-
-    Priority:
-    1) VOICE_ENGINE_MVP_SRC env var
-    2) ../voice_engine_MVP/src relative to this repo root
-    """
-    candidates: list[Path] = []
-
-    env_path = os.getenv("VOICE_ENGINE_MVP_SRC", "").strip()
-    if env_path:
-        candidates.append(Path(env_path).expanduser())
-
-    repo_root = Path(__file__).resolve().parent
-    candidates.append((repo_root / ".." / "voice_engine_MVP" / "src").resolve())
-
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-
-    checked = "\n".join(f"- {str(path)}" for path in candidates)
-    raise RuntimeError(
-        "voice_engine_MVP/src not found. Set VOICE_ENGINE_MVP_SRC or place voice_engine_MVP "
-        f"next to this repo. Checked:\n{checked}"
-    )
-
-
-
-def _load_voice_engine_symbols() -> tuple[Any, Any, Any, Any]:
-    src_path = _resolve_voice_engine_src()
-    if str(src_path) not in sys.path:
-        sys.path.insert(0, str(src_path))
-
-    try:
-        from config import get_config  # type: ignore
-        from llm_handler import LLMHandler as VoiceLLMHandler  # type: ignore
-        from stt_handler import STTHandler  # type: ignore
-        from tts_handler_optimized import TTSHandler  # type: ignore
-    except Exception as exc:
-        raise RuntimeError(f"Failed to import voice_engine_MVP modules from {src_path}: {exc}") from exc
-
-    logger.info("Loaded Voice MVP modules from: %s", src_path)
-    return STTHandler, VoiceLLMHandler, TTSHandler, get_config
-
-
-STTHandler, BaseVoiceLLMHandler, TTSHandler, get_voice_config = _load_voice_engine_symbols()
 
 
 # ---------------------------------------------------------------------------
