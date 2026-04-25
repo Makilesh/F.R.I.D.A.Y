@@ -367,16 +367,22 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
             return "Could you repeat that, boss?"
 
         canonical_messages = self._build_messages(conversation_history, text.strip())
+        spoken_content: list[str] = []
 
         for _ in range(MAX_TOOL_CALL_LOOPS):
             model_reply = await self._call_with_fallback(canonical_messages)
 
             tool_calls = model_reply.get("tool_calls", [])
+            intermediate_content = (model_reply.get("content") or "").strip()
+
             if tool_calls:
+                if intermediate_content:
+                    spoken_content.append(intermediate_content)
+
                 canonical_messages.append(
                     {
                         "role": "assistant",
-                        "content": model_reply.get("content", ""),
+                        "content": intermediate_content,
                         "tool_calls": tool_calls,
                     }
                 )
@@ -393,13 +399,14 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
                     )
                 continue
 
-            text_response = (model_reply.get("content") or "").strip()
-            if text_response:
-                return text_response
+            if intermediate_content:
+                spoken_content.append(intermediate_content)
+                break
 
             break
 
-        return "I hit a snag on that one, boss. Want me to try again?"
+        full_response = " ".join(spoken_content).strip()
+        return full_response if full_response else "I hit a snag on that one, boss. Want me to try again?"
 
     def _build_messages(self, history: list[str], latest_text: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": self.system_prompt}]
