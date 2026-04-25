@@ -111,7 +111,7 @@ class LLMConfig:
     
     # Third fallback (Ollama - local)
     ollama_model: str = field(default_factory=lambda: os.getenv('OLLAMA_MODEL', 'llama3.1:8b'))
-    ollama_max_tokens: int = 120
+    ollama_max_tokens: int = 400
     
     # Timeouts
     request_timeout: float = 12.0

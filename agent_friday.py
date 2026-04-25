@@ -899,7 +899,8 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
         return {"content": content}
 
     def _parse_ollama_response(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Parse Ollama /api/chat response into canonical {content, tool_calls} dict."""
+        """Parse Ollama /api/chat response into canonical {content, tool_calls} dict.
+        Handles both structured tool_calls AND text-embedded JSON tool calls."""
         message = result.get("message", {})
         tool_calls: list[dict[str, Any]] = []
 
@@ -923,7 +924,59 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
 
         if tool_calls:
             return {"content": message.get("content", "") or "", "tool_calls": tool_calls}
-        return {"content": (message.get("content", "") or "").strip()}
+
+        raw_content = (message.get("content", "") or "").strip()
+        embedded = self._extract_embedded_tool_call(raw_content)
+        if embedded:
+            return {"content": "", "tool_calls": [embedded]}
+
+        return {"content": raw_content}
+
+    def _extract_embedded_tool_call(self, text: str) -> dict[str, Any] | None:
+        """
+        Try to extract a tool call from plain text content.
+        Ollama sometimes outputs: {"name": "get_world_news", "parameters": {}}
+        instead of using the structured tool_calls field.
+        Returns a canonical tool call dict, or None if not found.
+        """
+        import re
+
+        if not text:
+            return None
+
+        known_tools = {tool["name"] for tool in self.mcp_client.tools}
+        if not known_tools:
+            return None
+
+        json_pattern = re.compile(r'\{[^{}]*\}', re.DOTALL)
+
+        for match in json_pattern.finditer(text):
+            try:
+                parsed = json.loads(match.group())
+            except json.JSONDecodeError:
+                continue
+
+            name = parsed.get("name") or parsed.get("function") or parsed.get("tool")
+            if not name or name not in known_tools:
+                continue
+
+            arguments = (
+                parsed.get("parameters")
+                or parsed.get("arguments")
+                or parsed.get("args")
+                or {}
+            )
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            logger.info("🔧 Extracted embedded tool call from Ollama text: %s", name)
+            return {
+                "id": "embedded_1",
+                "name": name,
+                "arguments": arguments,
+            }
+
+        return None
 
     async def _execute_tool(self, tool_call: dict[str, Any]) -> str:
         name = tool_call.get("name", "")
