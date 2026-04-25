@@ -588,12 +588,75 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
         message = result["choices"][0]["message"]
         return self._parse_openai_like_message(message)
 
+    def _serialize_ollama_messages(
+        self, messages: list[dict[str, Any]], include_tool_turns: bool = True
+    ) -> list[dict[str, Any]]:
+        """
+        Serialize messages for Ollama's /api/chat endpoint.
+
+        Ollama does not support role='tool' in the standard OpenAI sense for most models.
+        Tool results are converted to role='user' messages with explicit labeling.
+        When include_tool_turns=False, all tool-related turns are stripped out entirely
+        so the conversation degrades cleanly to plain chat.
+        """
+        serialized: list[dict[str, Any]] = []
+
+        for message in messages:
+            role = message.get("role")
+
+            if role == "system":
+                serialized.append({"role": "system", "content": message.get("content", "") or ""})
+            elif role == "user":
+                serialized.append({"role": "user", "content": message.get("content", "") or ""})
+            elif role == "assistant":
+                content = message.get("content", "") or ""
+                tool_calls = message.get("tool_calls", [])
+                if tool_calls and include_tool_turns:
+                    call_descriptions = []
+                    for call in tool_calls:
+                        name = call.get("name", "tool")
+                        args = call.get("arguments", {})
+                        call_descriptions.append(f"[calling {name} with {json.dumps(args)}]")
+                    combined = (content + " " + " ".join(call_descriptions)).strip()
+                    serialized.append({"role": "assistant", "content": combined})
+                elif content:
+                    serialized.append({"role": "assistant", "content": content})
+            elif role == "tool" and include_tool_turns:
+                tool_name = message.get("name", "tool")
+                content = message.get("content", "") or ""
+                serialized.append(
+                    {
+                        "role": "user",
+                        "content": f"[Tool result from {tool_name}]: {content}",
+                    }
+                )
+
+        merged: list[dict[str, Any]] = []
+        for turn in serialized:
+            if merged and merged[-1]["role"] == turn["role"]:
+                merged[-1]["content"] += "\n" + turn["content"]
+            else:
+                merged.append(dict(turn))
+
+        while merged and merged[0]["role"] == "assistant":
+            merged.pop(0)
+
+        return merged
+
     async def _call_ollama_with_tools(
         self, messages: list[dict[str, Any]], max_tokens: int, temperature: float
     ) -> dict[str, Any]:
-        payload = {
+        """
+        Call Ollama with graceful degradation:
+        1. Try with tools + Ollama-format messages
+        2. On HTTP 400, retry in plain chat mode (no tools, no tool-result turns)
+        """
+        url = f"{self.config.api.ollama_base_url}/api/chat"
+
+        ollama_messages_with_tools = self._serialize_ollama_messages(messages, include_tool_turns=True)
+        payload_with_tools: dict[str, Any] = {
             "model": self.config.llm.ollama_model,
-            "messages": self._serialize_openai_messages(messages),
+            "messages": ollama_messages_with_tools,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -601,37 +664,35 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
             "stream": False,
         }
         if self.tool_schemas["ollama"]:
-            payload["tools"] = self.tool_schemas["ollama"]
+            payload_with_tools["tools"] = self.tool_schemas["ollama"]
 
-        url = f"{self.config.api.ollama_base_url}/api/chat"
+        try:
+            async with httpx.AsyncClient(timeout=self.config.llm.ollama_timeout) as ollama_client:
+                response = await ollama_client.post(url, json=payload_with_tools)
+                if response.status_code != 400:
+                    response.raise_for_status()
+                    return self._parse_ollama_response(response.json())
+                logger.warning("Ollama HTTP 400 with tools — retrying in plain chat mode")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            logger.warning("Ollama HTTP 400 with tools — retrying in plain chat mode")
+
+        ollama_messages_plain = self._serialize_ollama_messages(messages, include_tool_turns=False)
+        payload_plain: dict[str, Any] = {
+            "model": self.config.llm.ollama_model,
+            "messages": ollama_messages_plain,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+            "stream": False,
+        }
+
         async with httpx.AsyncClient(timeout=self.config.llm.ollama_timeout) as ollama_client:
-            response = await ollama_client.post(url, json=payload)
+            response = await ollama_client.post(url, json=payload_plain)
             response.raise_for_status()
-            result = response.json()
-
-        message = result.get("message", {})
-        tool_calls: list[dict[str, Any]] = []
-        for idx, call in enumerate(message.get("tool_calls", []), start=1):
-            function_payload = call.get("function", {}) if isinstance(call, dict) else {}
-            arguments = function_payload.get("arguments", {})
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-            if not isinstance(arguments, dict):
-                arguments = {}
-            tool_calls.append(
-                {
-                    "id": call.get("id") if isinstance(call, dict) else f"ollama_{idx}",
-                    "name": function_payload.get("name", ""),
-                    "arguments": arguments,
-                }
-            )
-
-        if tool_calls:
-            return {"content": message.get("content", "") or "", "tool_calls": tool_calls}
-        return {"content": (message.get("content", "") or "").strip()}
+            return self._parse_ollama_response(response.json())
 
     async def _call_gemini_with_tools(
         self, messages: list[dict[str, Any]], max_tokens: int, temperature: float
@@ -829,6 +890,33 @@ class FridayLLMHandler(BaseVoiceLLMHandler):
         if tool_calls:
             return {"content": content, "tool_calls": tool_calls}
         return {"content": content}
+
+    def _parse_ollama_response(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Parse Ollama /api/chat response into canonical {content, tool_calls} dict."""
+        message = result.get("message", {})
+        tool_calls: list[dict[str, Any]] = []
+
+        for idx, call in enumerate(message.get("tool_calls", []), start=1):
+            function_payload = call.get("function", {}) if isinstance(call, dict) else {}
+            arguments = function_payload.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            tool_calls.append(
+                {
+                    "id": call.get("id") if isinstance(call, dict) else f"ollama_{idx}",
+                    "name": function_payload.get("name", ""),
+                    "arguments": arguments,
+                }
+            )
+
+        if tool_calls:
+            return {"content": message.get("content", "") or "", "tool_calls": tool_calls}
+        return {"content": (message.get("content", "") or "").strip()}
 
     async def _execute_tool(self, tool_call: dict[str, Any]) -> str:
         name = tool_call.get("name", "")

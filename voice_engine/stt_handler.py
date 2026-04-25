@@ -226,22 +226,29 @@ class STTHandler:
                         use_microphone=True
                     )
                 
-                # Aggressively prefer GPU. If CUDA cannot be used at runtime,
-                # fall back without crashing the voice session.
-                logger.info("🚀 Whisper: attempting CUDA float16")
-                try:
-                    return _build_recorder("cuda", "float16")
-                except Exception as e:
-                    logger.warning(f"⚠️ CUDA float16 init failed ({e}); trying CUDA int8")
+                def _cuda_runtime_available() -> bool:
+                    import ctypes
 
-                try:
-                    return _build_recorder("cuda", "int8")
-                except Exception as e:
-                    logger.warning(f"⚠️ CUDA int8 init failed ({e}); falling back to CPU int8")
+                    for dll in ["cudart64_12.dll", "cudart64_120.dll", "cudart64_115.dll", "cublas64_12.dll"]:
+                        try:
+                            ctypes.WinDLL(dll)
+                            return True
+                        except OSError:
+                            continue
+                    return False
+
+                if _cuda_runtime_available():
+                    for compute_type in ["int8", "float16"]:
+                        try:
+                            logger.info(f"🚀 Whisper: CUDA found — trying {compute_type}")
+                            return _build_recorder("cuda", compute_type)
+                        except Exception as e:
+                            logger.warning(f"⚠️ CUDA {compute_type} failed ({e}), trying next...")
+                    logger.warning("⚠️ All CUDA compute types failed — falling back to CPU int8")
 
                 logger.info(
-                    "ℹ️ Whisper: running on CPU int8. For GPU support install CUDA-enabled "
-                    "ctranslate2 (example: pip install ctranslate2[cuda12])."
+                    "ℹ️ Whisper: CUDA runtime DLLs not found — using CPU int8. "
+                    "To enable GPU: pip install ctranslate2[cuda12]"
                 )
                 return _build_recorder("cpu", "int8")
             
