@@ -4,6 +4,7 @@ import logging
 import asyncio
 import warnings
 import concurrent.futures
+import os
 import re
 import threading
 import numpy as np
@@ -13,6 +14,11 @@ from RealtimeSTT import AudioToTextRecorder
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_STT_INITIAL_PROMPT = (
+    "F.R.I.D.A.Y, Friday, Tony Stark, boss, world news, finance news, markets, "
+    "monitor, assistant, automation, MCP, tools, weather, calendar, tasks"
+)
 
 class STTHandler:
     """Full-duplex STT with continuous real-time transcription."""
@@ -190,6 +196,7 @@ class STTHandler:
                     handler_self._on_transcription_complete(text)
                 
                 def _build_recorder(device: str, compute_type: str):
+                    initial_prompt = os.getenv("STT_INITIAL_PROMPT", "").strip() or DEFAULT_STT_INITIAL_PROMPT
                     return AudioToTextRecorder(
                         model=self.model_name,
                         language="en",
@@ -215,32 +222,27 @@ class STTHandler:
                         webrtc_sensitivity=3,      # Increased from 2 (higher = more sensitive)
                         
                         beam_size=1,  # Fastest: near-realtime (was 3)
-                        initial_prompt="Shamla Tech AI services, blockchain, cryptocurrency, DeFi, API, machine learning, automation",
+                        initial_prompt=initial_prompt,
                         use_microphone=True
                     )
                 
-                # Try CUDA first (RTX 5070 Ti), fall back to CPU if CUDA runtime not installed.
-                # Use ctypes DLL check: instant, no subprocess spawned.
-                # get_cuda_device_count() only uses NVML (driver API) — not a reliable compute check.
-                def _cuda_runtime_available() -> bool:
-                    import ctypes
-                    for dll in ["cudart64_12.dll", "cudart64_120.dll", "cudart64_115.dll", "cublas64_12.dll"]:
-                        try:
-                            ctypes.WinDLL(dll)
-                            return True
-                        except OSError:
-                            continue
-                    return False
+                # Aggressively prefer GPU. If CUDA cannot be used at runtime,
+                # fall back without crashing the voice session.
+                logger.info("🚀 Whisper: attempting CUDA float16")
+                try:
+                    return _build_recorder("cuda", "float16")
+                except Exception as e:
+                    logger.warning(f"⚠️ CUDA float16 init failed ({e}); trying CUDA int8")
 
-                if _cuda_runtime_available():
-                    logger.info("🚀 Whisper: CUDA runtime found — using float16 (RTX 5070 Ti)")
-                    try:
-                        return _build_recorder("cuda", "float16")
-                    except Exception as e:
-                        logger.warning(f"⚠️ CUDA recorder failed ({e}), falling back to CPU int8")
+                try:
+                    return _build_recorder("cuda", "int8")
+                except Exception as e:
+                    logger.warning(f"⚠️ CUDA int8 init failed ({e}); falling back to CPU int8")
 
-                logger.info("ℹ️ Whisper: CUDA runtime DLLs not found — using CPU int8. "
-                            "To enable GPU: pip install ctranslate2[cuda12]")
+                logger.info(
+                    "ℹ️ Whisper: running on CPU int8. For GPU support install CUDA-enabled "
+                    "ctranslate2 (example: pip install ctranslate2[cuda12])."
+                )
                 return _build_recorder("cpu", "int8")
             
             with concurrent.futures.ThreadPoolExecutor() as executor:
