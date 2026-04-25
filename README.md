@@ -25,6 +25,7 @@ Microphone -> STTHandler (RealtimeSTT + Whisper)
 friday-tony-stark-demo/
 |- server.py                # MCP server entrypoint
 |- agent_friday.py          # Voice runtime entrypoint (Voice MVP + MCP)
+|- voice_engine/            # Bundled voice engine package
 |- pyproject.toml
 |- .env.example
 `- friday/
@@ -37,10 +38,7 @@ friday-tony-stark-demo/
 
 - Python 3.11+
 - `uv`
-- Local clone of `voice_engine_MVP`
-  - Repository: `https://github.com/Makilesh/voice_engine_MVP`
-  - Default lookup: `../voice_engine_MVP/src` relative to this repo
-  - Or set `VOICE_ENGINE_MVP_SRC` in `.env`
+- The voice engine is bundled inside the `voice_engine/` package in this repo. No external clone is needed.
 
 ## Setup
 
@@ -83,7 +81,6 @@ uv run friday_voice
 | `OLLAMA_MODEL` | Optional | Default: `llama3.1:8b` |
 | `USE_CARTESIA_TTS` | Optional | `false` uses local Kokoro (default), `true` uses Cartesia |
 | `CARTESIA_API_KEY` | Optional | Needed only when `USE_CARTESIA_TTS=true` |
-| `VOICE_ENGINE_MVP_SRC` | Optional | Absolute path to `voice_engine_MVP/src` |
 
 ### Required behavior
 
